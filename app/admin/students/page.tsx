@@ -116,8 +116,9 @@ export default function StudentsPage() {
 
       setModalOpen(false);
       fetchStudents();
-    } catch {
-      showToast('Failed to save student record', 'error');
+    } catch (err: any) {
+      console.error('Save student error:', err);
+      showToast(err?.message || 'Failed to save student record', 'error');
     } finally {
       setSaving(false);
     }

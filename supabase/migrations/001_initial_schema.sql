@@ -189,6 +189,15 @@ CREATE POLICY "anon_select_students" ON students
 CREATE POLICY "auth_select_students" ON students
   FOR SELECT TO authenticated USING (true);
 
+CREATE POLICY "auth_insert_students" ON students
+  FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "auth_update_students" ON students
+  FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "auth_delete_students" ON students
+  FOR DELETE TO authenticated USING (true);
+
 -- ----- EXAM_ATTEMPTS -----
 -- Anon can insert exam_attempts (via API route, but also direct for flexibility)
 CREATE POLICY "anon_insert_exam_attempts" ON exam_attempts

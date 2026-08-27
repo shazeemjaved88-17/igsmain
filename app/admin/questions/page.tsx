@@ -1,5 +1,5 @@
 // app/admin/questions/page.tsx
-// Admin questions CRUD page — course selector + MCQ management + CSV bulk import
+// Admin questions CRUD page — MCQ management + Bulk Import from CSV and PDF
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
@@ -25,6 +25,15 @@ interface Question {
   created_at: string;
 }
 
+interface ParsedQuestion {
+  question_text: string;
+  option_a: string;
+  option_b: string;
+  option_c: string;
+  option_d: string;
+  correct_option: string;
+}
+
 const emptyForm = {
   question_text: '',
   option_a: '',
@@ -40,12 +49,21 @@ export default function QuestionsPage() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [questionsLoading, setQuestionsLoading] = useState(false);
+  
+  // Single question modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Question | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  // Bulk import modal state
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importCourseId, setImportCourseId] = useState('');
+  const [parsedQuestions, setParsedQuestions] = useState<ParsedQuestion[]>([]);
+  const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
   const supabase = createClient();
   const { showToast } = useToast();
 
@@ -105,6 +123,10 @@ export default function QuestionsPage() {
   }
 
   async function handleSave() {
+    if (!selectedCourseId) {
+      showToast('Please select a course first', 'error');
+      return;
+    }
     if (!form.question_text.trim() || !form.option_a.trim() || !form.option_b.trim() || !form.option_c.trim() || !form.option_d.trim()) {
       showToast('All fields are required', 'error');
       return;
@@ -153,71 +175,98 @@ export default function QuestionsPage() {
     }
   }
 
-  async function handleCSVImport(e: React.ChangeEvent<HTMLInputElement>) {
+  // Open Bulk Import Modal
+  function openImportModal() {
+    setImportCourseId(selectedCourseId || (courses[0]?.id || ''));
+    setParsedQuestions([]);
+    setImportModalOpen(true);
+  }
+
+  // Handle File Selection (CSV, PDF, TXT)
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!selectedCourseId) {
-      showToast('Please select a course first', 'error');
-      return;
-    }
 
-    setImporting(true);
+    setParsing(true);
     try {
-      const text = await file.text();
-      const lines = text.split('\n').filter((l) => l.trim());
+      const extension = file.name.split('.').pop()?.toLowerCase();
 
-      // Skip header if it looks like column names
-      let startIdx = 0;
-      if (lines[0]?.toLowerCase().includes('question_text')) {
-        startIdx = 1;
+      if (extension === 'csv') {
+        const text = await file.text();
+        const parsed = parseCSVText(text);
+        setParsedQuestions(parsed);
+        showToast(`Parsed ${parsed.length} questions from CSV`);
+      } else if (extension === 'pdf') {
+        const text = await extractTextFromPDF(file);
+        const parsed = parseTextToQuestions(text);
+        setParsedQuestions(parsed);
+        showToast(`Parsed ${parsed.length} questions from PDF`);
+      } else if (extension === 'txt') {
+        const text = await file.text();
+        const parsed = parseTextToQuestions(text);
+        setParsedQuestions(parsed);
+        showToast(`Parsed ${parsed.length} questions from TXT`);
+      } else {
+        showToast('Unsupported file format. Please upload CSV, PDF, or TXT.', 'error');
       }
-
-      const rows = [];
-      for (let i = startIdx; i < lines.length; i++) {
-        // Parse CSV with potential commas in values (simple approach)
-        const parts = parseCSVLine(lines[i]);
-        if (parts.length < 6) continue;
-
-        const correctOption = parts[5].trim().toUpperCase();
-        if (!['A', 'B', 'C', 'D'].includes(correctOption)) {
-          showToast(`Row ${i + 1}: Invalid correct option "${parts[5]}"`, 'warning');
-          continue;
-        }
-
-        rows.push({
-          course_id: selectedCourseId,
-          question_text: parts[0].trim(),
-          option_a: parts[1].trim(),
-          option_b: parts[2].trim(),
-          option_c: parts[3].trim(),
-          option_d: parts[4].trim(),
-          correct_option: correctOption,
-        });
-      }
-
-      if (rows.length === 0) {
-        showToast('No valid questions found in CSV', 'error');
-        return;
-      }
-
-      const { error } = await supabase.from('questions').insert(rows);
-      if (error) throw error;
-
-      showToast(`Successfully imported ${rows.length} questions`);
-      fetchQuestions(selectedCourseId);
-    } catch {
-      showToast('Failed to import CSV', 'error');
+    } catch (err) {
+      console.error('Parsing error:', err);
+      showToast('Failed to parse file. Please check format.', 'error');
     } finally {
-      setImporting(false);
+      setParsing(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  }
+
+  // PDF Text Extractor using pdfjs-dist
+  async function extractTextFromPDF(file: File): Promise<string> {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfjsLib = await import('pdfjs-dist');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+    
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    let fullText = '';
+    
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      fullText += pageText + '\n';
+    }
+    return fullText;
+  }
+
+  // CSV Parser
+  function parseCSVText(text: string): ParsedQuestion[] {
+    const lines = text.split('\n').filter((l) => l.trim());
+    let startIdx = 0;
+    if (lines[0]?.toLowerCase().includes('question_text')) {
+      startIdx = 1;
+    }
+
+    const result: ParsedQuestion[] = [];
+    for (let i = startIdx; i < lines.length; i++) {
+      const parts = parseCSVLine(lines[i]);
+      if (parts.length < 5) continue;
+
+      const correct = (parts[5] || 'A').trim().toUpperCase();
+      result.push({
+        question_text: parts[0].trim(),
+        option_a: parts[1].trim(),
+        option_b: (parts[2] || '').trim(),
+        option_c: (parts[3] || '').trim(),
+        option_d: (parts[4] || '').trim(),
+        correct_option: ['A', 'B', 'C', 'D'].includes(correct) ? correct : 'A',
+      });
+    }
+    return result;
   }
 
   function parseCSVLine(line: string): string[] {
     const result: string[] = [];
     let current = '';
     let inQuotes = false;
-
     for (let i = 0; i < line.length; i++) {
       const char = line[i];
       if (char === '"') {
@@ -231,6 +280,90 @@ export default function QuestionsPage() {
     }
     result.push(current);
     return result;
+  }
+
+  // Text/PDF MCQ Parser Regex
+  function parseTextToQuestions(text: string): ParsedQuestion[] {
+    const questions: ParsedQuestion[] = [];
+    
+    // Split by numbered questions e.g. "1.", "Q1.", "Question 1"
+    const blocks = text.split(/(?=(?:\d+[\.\)]|Q\d+[\.\)]|Question\s*\d+[\.\)]))/i);
+
+    for (const block of blocks) {
+      const trimmed = block.trim();
+      if (!trimmed) continue;
+
+      // Extract Question Text (before options A/B/C/D)
+      const qMatch = trimmed.match(/^(?:\d+[\.\)]|Q\d+[\.\)]|Question\s*\d+[\.\)]|\s*)*([\s\S]+?)(?=\s*[A][\.\)]|\s*Ans|\s*Answer)/i);
+      if (!qMatch) continue;
+
+      const qText = qMatch[1].trim();
+
+      // Extract options A, B, C, D
+      const optAMatch = trimmed.match(/A[\.\)]\s*([\s\S]+?)(?=\s*B[\.\)]|\s*Ans|\s*Answer|$)/i);
+      const optBMatch = trimmed.match(/B[\.\)]\s*([\s\S]+?)(?=\s*C[\.\)]|\s*Ans|\s*Answer|$)/i);
+      const optCMatch = trimmed.match(/C[\.\)]\s*([\s\S]+?)(?=\s*D[\.\)]|\s*Ans|\s*Answer|$)/i);
+      const optDMatch = trimmed.match(/D[\.\)]\s*([\s\S]+?)(?=\s*Ans|\s*Answer|$)/i);
+
+      // Extract Answer
+      const ansMatch = trimmed.match(/(?:Ans|Answer|Correct)[:\s]*([A-D])/i);
+      const correctOption = ansMatch ? ansMatch[1].toUpperCase() : 'A';
+
+      if (qText && optAMatch && optBMatch) {
+        questions.push({
+          question_text: qText,
+          option_a: optAMatch[1].trim(),
+          option_b: optBMatch[1].trim(),
+          option_c: optCMatch ? optCMatch[1].trim() : 'None',
+          option_d: optDMatch ? optDMatch[1].trim() : 'None',
+          correct_option: correctOption,
+        });
+      }
+    }
+
+    return questions;
+  }
+
+  // Confirm Bulk Import to Database
+  async function confirmBulkImport() {
+    if (!importCourseId) {
+      showToast('Please select a course to import questions into', 'error');
+      return;
+    }
+    if (parsedQuestions.length === 0) {
+      showToast('No parsed questions to import', 'error');
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const rows = parsedQuestions.map((q) => ({
+        course_id: importCourseId,
+        question_text: q.question_text,
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+        correct_option: q.correct_option,
+      }));
+
+      const { error } = await supabase.from('questions').insert(rows);
+      if (error) throw error;
+
+      showToast(`Successfully imported ${rows.length} questions!`);
+      setImportModalOpen(false);
+      
+      // Update view if current course matches import course
+      if (selectedCourseId === importCourseId) {
+        fetchQuestions(selectedCourseId);
+      } else {
+        setSelectedCourseId(importCourseId);
+      }
+    } catch {
+      showToast('Failed to import questions to database', 'error');
+    } finally {
+      setImporting(false);
+    }
   }
 
   return (
@@ -247,19 +380,11 @@ export default function QuestionsPage() {
       >
         <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Questions</h1>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            style={{ display: 'none' }}
-            onChange={handleCSVImport}
-          />
           <button
-            className="btn btn-outline btn-sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!selectedCourseId || importing}
+            className="btn btn-outline"
+            onClick={openImportModal}
           >
-            {importing ? 'Importing...' : '📄 Bulk Import CSV'}
+            📄 Bulk Import (CSV / PDF)
           </button>
           <button
             className="btn btn-primary"
@@ -276,7 +401,7 @@ export default function QuestionsPage() {
 
       {/* Course Selector */}
       <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
-        <label htmlFor="course-select" className="label">Select Course</label>
+        <label htmlFor="course-select" className="label">Select Course to View Questions</label>
         <select
           id="course-select"
           className="select"
@@ -294,9 +419,12 @@ export default function QuestionsPage() {
       {!selectedCourseId ? (
         <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
           <p style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>❓</p>
-          <p style={{ color: 'var(--text-secondary)' }}>
-            Select a course above to view and manage its questions.
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+            Select a course above to view its questions, or use Bulk Import to add questions from CSV/PDF.
           </p>
+          <button className="btn btn-outline" onClick={openImportModal}>
+            📄 Bulk Import (CSV / PDF)
+          </button>
         </div>
       ) : loading || questionsLoading ? (
         <SkeletonTable rows={5} />
@@ -304,22 +432,19 @@ export default function QuestionsPage() {
         <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
           <p style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📝</p>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            No questions for this course yet. Add questions manually or import from CSV.
-          </p>
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-            CSV format: question_text, option_a, option_b, option_c, option_d, correct_option
+            No questions for this course yet. Add questions manually or import from CSV/PDF.
           </p>
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
             <button className="btn btn-primary" onClick={openAdd}>Add Question</button>
-            <button className="btn btn-outline" onClick={() => fileInputRef.current?.click()}>
-              Import CSV
+            <button className="btn btn-outline" onClick={openImportModal}>
+              📄 Bulk Import (CSV / PDF)
             </button>
           </div>
         </div>
       ) : (
         <>
           <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            {questions.length} question{questions.length !== 1 ? 's' : ''} in this course
+            Showing {questions.length} question{questions.length !== 1 ? 's' : ''} in this course
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {questions.map((q, i) => (
@@ -363,7 +488,7 @@ export default function QuestionsPage() {
         </>
       )}
 
-      {/* Add/Edit Modal */}
+      {/* Add/Edit Question Modal */}
       <Modal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -429,6 +554,147 @@ export default function QuestionsPage() {
               ))}
             </div>
           </div>
+        </div>
+      </Modal>
+
+      {/* BULK IMPORT MODAL (CSV & PDF) */}
+      <Modal
+        isOpen={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        title="📄 Bulk Import Questions (CSV / PDF / TXT)"
+        footer={
+          <>
+            <button className="btn btn-ghost" onClick={() => setImportModalOpen(false)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={confirmBulkImport}
+              disabled={importing || parsedQuestions.length === 0 || !importCourseId}
+            >
+              {importing ? 'Importing...' : `Import ${parsedQuestions.length} Questions`}
+            </button>
+          </>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {/* Step 1: Select Target Course */}
+          <div>
+            <label htmlFor="import-course-select" className="label">
+              1. Which course should these questions be added to? *
+            </label>
+            <select
+              id="import-course-select"
+              className="select"
+              value={importCourseId}
+              onChange={(e) => setImportCourseId(e.target.value)}
+              required
+            >
+              <option value="">-- Select Course --</option>
+              {courses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Step 2: Upload File */}
+          <div>
+            <label htmlFor="import-file" className="label">
+              2. Upload Questions File (.csv, .pdf, .txt) *
+            </label>
+            <input
+              ref={fileInputRef}
+              id="import-file"
+              type="file"
+              accept=".csv,.pdf,.txt"
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
+            />
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={parsing}
+              style={{ width: '100%', padding: '0.875rem' }}
+            >
+              {parsing ? 'Parsing File...' : '📁 Choose CSV / PDF / TXT File'}
+            </button>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.375rem' }}>
+              Formats supported: CSV (columns: question_text, option_a, option_b, option_c, option_d, correct_option) or PDF/TXT.
+            </p>
+          </div>
+
+          {/* Step 3: Parsed Questions Preview */}
+          {parsedQuestions.length > 0 && (
+            <div>
+              <p style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--accent)', marginBottom: '0.5rem' }}>
+                ✓ Parsed {parsedQuestions.length} Questions (Preview):
+              </p>
+              <div
+                style={{
+                  maxHeight: '260px',
+                  overflowY: 'auto',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '0.5rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.5rem',
+                  background: 'var(--bg-secondary)',
+                }}
+              >
+                {parsedQuestions.map((q, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      background: 'white',
+                      padding: '0.75rem',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <p style={{ fontSize: '0.8125rem', fontWeight: 600, marginBottom: '0.375rem' }}>
+                      {idx + 1}. {q.question_text}
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.25rem', fontSize: '0.75rem' }}>
+                      <div>A. {q.option_a}</div>
+                      <div>B. {q.option_b}</div>
+                      <div>C. {q.option_c}</div>
+                      <div>D. {q.option_d}</div>
+                    </div>
+                    <div style={{ marginTop: '0.375rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span>Correct Answer:</span>
+                      {['A', 'B', 'C', 'D'].map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => {
+                            const updated = [...parsedQuestions];
+                            updated[idx].correct_option = opt;
+                            setParsedQuestions(updated);
+                          }}
+                          style={{
+                            padding: '0.125rem 0.375rem',
+                            fontSize: '0.6875rem',
+                            borderRadius: '3px',
+                            border: q.correct_option === opt ? '1px solid var(--accent)' : '1px solid var(--border)',
+                            background: q.correct_option === opt ? 'var(--accent-50)' : 'white',
+                            color: q.correct_option === opt ? 'var(--accent)' : 'var(--text-primary)',
+                            fontWeight: q.correct_option === opt ? 600 : 400,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
     </div>

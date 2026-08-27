@@ -8,21 +8,15 @@ export async function middleware(request: NextRequest) {
     request,
   });
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    'https://civszbqmdhchmemuaqvo.supabase.co';
+  const key =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    'sb_publishable_KpSj3iMjxfEJG4LYU0rfYg_wNCcGvno';
 
   const isAdminRoute = request.nextUrl.pathname.startsWith('/admin');
   const isLoginRoute = request.nextUrl.pathname === '/admin/login';
-
-  // If env vars are missing or invalid on Vercel, redirect to login instead of crashing
-  if (!url || !url.startsWith('http') || !key) {
-    if (isAdminRoute && !isLoginRoute) {
-      const redirectUrl = request.nextUrl.clone();
-      redirectUrl.pathname = '/admin/login';
-      return NextResponse.redirect(redirectUrl);
-    }
-    return supabaseResponse;
-  }
 
   try {
     const supabase = createServerClient(url, key, {

@@ -1,5 +1,5 @@
 // app/exam/start/page.tsx
-// Student exam entry form — name, roll number, teacher/course selection
+// Student exam entry form — strict Roll Number verification against Admin registered students
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -71,39 +71,73 @@ export default function ExamStartPage() {
     e.preventDefault();
     setError('');
 
-    if (!form.name.trim() || !form.roll_number.trim() || !form.teacher_id || !form.course_id) {
-      setError('Please fill in all fields.');
+    const inputName = form.name.trim();
+    const inputRoll = form.roll_number.trim();
+
+    if (!inputName || !inputRoll || !form.teacher_id || !form.course_id) {
+      setError('Please fill in all required fields.');
       return;
     }
 
     setSubmitting(true);
     try {
-      // Check if this student already has a completed attempt for this course
-      const { data: existingAttempts } = await supabase
-        .from('exam_attempts')
-        .select('id, students!inner(roll_number)')
-        .eq('course_id', form.course_id)
-        .eq('status', 'completed')
-        .eq('students.roll_number', form.roll_number.trim());
+      // ======================================================
+      // STRICT VERIFICATION: Verify Roll Number issued by Admin
+      // ======================================================
+      const { data: registeredStudent, error: findError } = await supabase
+        .from('students')
+        .select('*')
+        .ilike('roll_number', inputRoll)
+        .maybeSingle();
 
-      if (existingAttempts && existingAttempts.length > 0) {
-        setError('You have already completed this exam. Each student can only take the exam once per course.');
+      if (findError) {
+        console.error('Student lookup error:', findError);
+      }
+
+      if (!registeredStudent) {
+        setError(
+          `Invalid Roll Number ("${inputRoll}"). Only pre-registered students issued by the school administration can take exams. Please contact your administrator.`
+        );
         setSubmitting(false);
         return;
       }
 
-      // Insert student record
-      const { data: studentData, error: studentError } = await supabase
-        .from('students')
-        .insert({
-          name: form.name.trim(),
-          roll_number: form.roll_number.trim(),
-          course_id: form.course_id,
-        })
-        .select()
-        .single();
+      // Check course match if student was assigned a specific course by admin
+      if (registeredStudent.course_id && registeredStudent.course_id !== form.course_id) {
+        const assignedCourse = courses.find((c) => c.id === registeredStudent.course_id);
+        setError(
+          `This Roll Number is registered for course "${assignedCourse?.name || 'another course'}". Please select the correct course.`
+        );
+        setSubmitting(false);
+        return;
+      }
 
-      if (studentError) throw studentError;
+      // ======================================================
+      // DUPLICATE ATTEMPT CHECK
+      // ======================================================
+      const { data: existingAttempts } = await supabase
+        .from('exam_attempts')
+        .select('id')
+        .eq('course_id', form.course_id)
+        .eq('student_id', registeredStudent.id)
+        .eq('status', 'completed');
+
+      if (existingAttempts && existingAttempts.length > 0) {
+        setError(
+          'You have already completed this exam for this course. Each student can only take the exam once.'
+        );
+        setSubmitting(false);
+        return;
+      }
+
+      // Update student course assignment and name if needed
+      await supabase
+        .from('students')
+        .update({
+          course_id: form.course_id,
+          name: inputName,
+        })
+        .eq('id', registeredStudent.id);
 
       // Get course duration
       const selectedCourse = courses.find((c) => c.id === form.course_id);
@@ -113,9 +147,9 @@ export default function ExamStartPage() {
       sessionStorage.setItem(
         'examSession',
         JSON.stringify({
-          studentId: studentData.id,
-          studentName: form.name.trim(),
-          rollNumber: form.roll_number.trim(),
+          studentId: registeredStudent.id,
+          studentName: inputName,
+          rollNumber: registeredStudent.roll_number,
           courseId: form.course_id,
           durationSeconds,
           startTime: new Date().toISOString(),
@@ -123,7 +157,8 @@ export default function ExamStartPage() {
       );
 
       router.push(`/exam/${form.course_id}`);
-    } catch {
+    } catch (err) {
+      console.error('Exam start error:', err);
       setError('Failed to start exam. Please try again.');
     } finally {
       setSubmitting(false);
@@ -203,7 +238,7 @@ export default function ExamStartPage() {
               Start Your Exam
             </h1>
             <p style={{ fontSize: '0.875rem', opacity: 0.8 }}>
-              Enter your details to begin the MCQ examination
+              Enter your issued Roll Number to begin the examination
             </p>
           </div>
 
@@ -218,6 +253,7 @@ export default function ExamStartPage() {
                   color: '#dc2626',
                   fontSize: '0.875rem',
                   marginBottom: '1.25rem',
+                  lineHeight: 1.5,
                 }}
               >
                 {error}
@@ -238,15 +274,18 @@ export default function ExamStartPage() {
               </div>
 
               <div>
-                <label htmlFor="roll-number" className="label">Roll Number *</label>
+                <label htmlFor="roll-number" className="label">Issued Roll Number *</label>
                 <input
                   id="roll-number"
                   className="input"
-                  placeholder="Enter your roll number"
+                  placeholder="Enter your issued Roll Number (e.g. 1001)"
                   value={form.roll_number}
                   onChange={(e) => setForm({ ...form, roll_number: e.target.value })}
                   required
                 />
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                  Must be registered by school administration in Students Panel.
+                </p>
               </div>
 
               <div>
@@ -319,7 +358,7 @@ export default function ExamStartPage() {
                         display: 'inline-block',
                       }}
                     />
-                    Starting Exam...
+                    Verifying & Starting...
                   </span>
                 ) : (
                   'Begin Exam →'

@@ -1,12 +1,12 @@
 // app/admin/layout.tsx
-// Admin layout with sidebar navigation and logout button
+// Admin layout with sidebar navigation, client auth protection, and logout button
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { ToastProvider } from '@/components/ui/Toast';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 const navItems = [
   {
@@ -60,17 +60,75 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
 
   // Don't show sidebar on login page
-  if (pathname === '/admin/login') {
+  const isLoginPage = pathname === '/admin/login';
+
+  useEffect(() => {
+    if (isLoginPage) {
+      setCheckingAuth(false);
+      return;
+    }
+
+    const supabase = createClient();
+
+    // Check existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        router.replace('/admin/login');
+      } else {
+        setCheckingAuth(false);
+      }
+    });
+
+    // Listen for auth state changes (e.g. signout)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session && pathname !== '/admin/login') {
+        router.replace('/admin/login');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [isLoginPage, pathname, router]);
+
+  if (isLoginPage) {
     return <>{children}</>;
+  }
+
+  if (checkingAuth) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg-secondary)',
+        }}
+      >
+        <div style={{ textAlign: 'center' }}>
+          <div
+            className="animate-spin"
+            style={{
+              width: '40px',
+              height: '40px',
+              border: '3px solid var(--border)',
+              borderTopColor: 'var(--primary)',
+              borderRadius: '50%',
+              margin: '0 auto 1rem',
+            }}
+          />
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Verifying Admin Access...</p>
+        </div>
+      </div>
+    );
   }
 
   const handleLogout = async () => {
     const supabase = createClient();
     await supabase.auth.signOut();
-    router.push('/admin/login');
-    router.refresh();
+    window.location.href = '/admin/login';
   };
 
   return (

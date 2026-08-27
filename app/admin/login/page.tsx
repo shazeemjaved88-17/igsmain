@@ -3,7 +3,6 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 
@@ -12,8 +11,6 @@ export default function AdminLoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
-  const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,21 +18,28 @@ export default function AdminLoginPage() {
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
+      const supabase = createClient();
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
         password,
       });
 
       if (error) {
         setError(error.message);
+        setLoading(false);
         return;
       }
 
-      router.push('/admin/dashboard');
-      router.refresh();
-    } catch {
+      if (data?.session) {
+        // Full page redirect to ensure state is initialized cleanly
+        window.location.href = '/admin/dashboard';
+      } else {
+        setError('Login failed. Please check your credentials.');
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error('Login error:', err);
       setError('An unexpected error occurred. Please try again.');
-    } finally {
       setLoading(false);
     }
   };

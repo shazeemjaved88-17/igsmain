@@ -1,6 +1,5 @@
 // app/api/submit-exam/route.ts
 // Secure server-side scoring endpoint
-// Uses service role key to fetch correct answers — NEVER exposed to client
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -17,11 +16,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use the admin client (service role key) to bypass RLS
     const supabase = createAdminClient();
 
     // ======================================================
-    // ANTI-CHEAT: Check for existing completed attempt
+    // 1. ANTI-CHEAT: Check for existing completed attempt
     // ======================================================
     const { data: existingAttempt } = await supabase
       .from('exam_attempts')
@@ -39,22 +37,37 @@ export async function POST(request: NextRequest) {
     }
 
     // ======================================================
-    // SECURE SCORING: Fetch correct answers server-side
+    // 2. SECURE SCORING: Fetch correct answers server-side
     // ======================================================
-    const { data: questions, error: questionsError } = await supabase
+    let { data: questions, error: questionsError } = await supabase
       .from('questions')
       .select('id, correct_option')
       .eq('course_id', courseId);
 
+    // Fallback: If querying base table was restricted, query questions_public
     if (questionsError || !questions || questions.length === 0) {
+      console.warn('Questions query notice:', questionsError);
+      const fallbackRes = await supabase
+        .from('questions_public')
+        .select('id')
+        .eq('course_id', courseId);
+      
+      if (fallbackRes.data && fallbackRes.data.length > 0) {
+        // If correct options couldn't be read, try reading base table without filter
+        const baseRes = await supabase.from('questions').select('id, correct_option').eq('course_id', courseId);
+        questions = baseRes.data || [];
+      }
+    }
+
+    if (!questions || questions.length === 0) {
       return NextResponse.json(
-        { error: 'Failed to retrieve questions for scoring.' },
-        { status: 500 }
+        { error: 'This course has no questions to score.' },
+        { status: 400 }
       );
     }
 
     // ======================================================
-    // CALCULATE SCORE
+    // 3. CALCULATE SCORE
     // ======================================================
     let score = 0;
     const totalQuestions = questions.length;
@@ -69,7 +82,7 @@ export async function POST(request: NextRequest) {
     const percentage = Math.round((score / totalQuestions) * 100);
 
     // ======================================================
-    // INSERT EXAM ATTEMPT
+    // 4. INSERT EXAM ATTEMPT
     // ======================================================
     const { data: attempt, error: insertError } = await supabase
       .from('exam_attempts')
@@ -87,22 +100,21 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (insertError) {
-      // Handle unique constraint violation (duplicate attempt)
       if (insertError.code === '23505') {
         return NextResponse.json(
           { error: 'Duplicate submission detected. You have already completed this exam.' },
           { status: 409 }
         );
       }
-      console.error('Insert error:', insertError);
+      console.error('Insert exam attempt error:', insertError);
       return NextResponse.json(
-        { error: 'Failed to save exam results.' },
+        { error: `Failed to save exam results: ${insertError.message}` },
         { status: 500 }
       );
     }
 
     // ======================================================
-    // RETURN RESULT (no correct answers exposed)
+    // 5. RETURN RESULT
     // ======================================================
     return NextResponse.json({
       attemptId: attempt.id,
@@ -110,10 +122,10 @@ export async function POST(request: NextRequest) {
       total_questions: totalQuestions,
       percentage,
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('Submit exam error:', err);
     return NextResponse.json(
-      { error: 'An unexpected error occurred.' },
+      { error: err?.message || 'An unexpected error occurred during exam submission.' },
       { status: 500 }
     );
   }

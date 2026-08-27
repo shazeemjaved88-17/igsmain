@@ -8,10 +8,24 @@ export async function middleware(request: NextRequest) {
     request,
   });
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  const isAdminRoute = request.nextUrl.pathname.startsWith('/admin');
+  const isLoginRoute = request.nextUrl.pathname === '/admin/login';
+
+  // If env vars are missing or invalid on Vercel, redirect to login instead of crashing
+  if (!url || !url.startsWith('http') || !key) {
+    if (isAdminRoute && !isLoginRoute) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = '/admin/login';
+      return NextResponse.redirect(redirectUrl);
+    }
+    return supabaseResponse;
+  }
+
+  try {
+    const supabase = createServerClient(url, key, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -28,29 +42,31 @@ export async function middleware(request: NextRequest) {
           );
         },
       },
+    });
+
+    // Refresh session safely
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (isAdminRoute && !isLoginRoute && !user) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = '/admin/login';
+      return NextResponse.redirect(redirectUrl);
     }
-  );
 
-  // Refresh the session
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  // If the user is not authenticated and trying to access admin routes (except login)
-  const isAdminRoute = request.nextUrl.pathname.startsWith('/admin');
-  const isLoginRoute = request.nextUrl.pathname === '/admin/login';
-
-  if (isAdminRoute && !isLoginRoute && !user) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/admin/login';
-    return NextResponse.redirect(url);
-  }
-
-  // If user is authenticated and on login page, redirect to dashboard
-  if (isLoginRoute && user) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/admin/dashboard';
-    return NextResponse.redirect(url);
+    if (isLoginRoute && user) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = '/admin/dashboard';
+      return NextResponse.redirect(redirectUrl);
+    }
+  } catch (err) {
+    console.error('Middleware auth error:', err);
+    if (isAdminRoute && !isLoginRoute) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = '/admin/login';
+      return NextResponse.redirect(redirectUrl);
+    }
   }
 
   return supabaseResponse;

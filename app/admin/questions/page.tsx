@@ -53,6 +53,7 @@ export default function QuestionsPage() {
   // Single question modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Question | null>(null);
+  const [formCourseId, setFormCourseId] = useState('');
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
@@ -83,7 +84,8 @@ export default function QuestionsPage() {
 
   async function fetchCourses() {
     const { data } = await supabase.from('courses').select('id, name').order('name');
-    setCourses(data || []);
+    const courseList = data || [];
+    setCourses(courseList);
     setLoading(false);
   }
 
@@ -106,6 +108,7 @@ export default function QuestionsPage() {
   function openAdd() {
     setEditing(null);
     setForm(emptyForm);
+    setFormCourseId(selectedCourseId || (courses[0]?.id || ''));
     setModalOpen(true);
   }
 
@@ -119,23 +122,24 @@ export default function QuestionsPage() {
       option_d: q.option_d,
       correct_option: q.correct_option,
     });
+    setFormCourseId(q.course_id);
     setModalOpen(true);
   }
 
   async function handleSave() {
-    if (!selectedCourseId) {
-      showToast('Please select a course first', 'error');
+    if (!formCourseId) {
+      showToast('Please select a course for this question', 'error');
       return;
     }
     if (!form.question_text.trim() || !form.option_a.trim() || !form.option_b.trim() || !form.option_c.trim() || !form.option_d.trim()) {
-      showToast('All fields are required', 'error');
+      showToast('All question text and options fields are required', 'error');
       return;
     }
 
     setSaving(true);
     try {
       const data = {
-        course_id: selectedCourseId,
+        course_id: formCourseId,
         question_text: form.question_text.trim(),
         option_a: form.option_a.trim(),
         option_b: form.option_b.trim(),
@@ -155,8 +159,10 @@ export default function QuestionsPage() {
       }
 
       setModalOpen(false);
-      fetchQuestions(selectedCourseId);
-    } catch {
+      setSelectedCourseId(formCourseId);
+      fetchQuestions(formCourseId);
+    } catch (err) {
+      console.error('Save error:', err);
       showToast('Failed to save question', 'error');
     } finally {
       setSaving(false);
@@ -171,7 +177,9 @@ export default function QuestionsPage() {
       showToast('Failed to delete question', 'error');
     } else {
       showToast('Question deleted');
-      fetchQuestions(selectedCourseId);
+      if (selectedCourseId) {
+        fetchQuestions(selectedCourseId);
+      }
     }
   }
 
@@ -285,27 +293,22 @@ export default function QuestionsPage() {
   // Text/PDF MCQ Parser Regex
   function parseTextToQuestions(text: string): ParsedQuestion[] {
     const questions: ParsedQuestion[] = [];
-    
-    // Split by numbered questions e.g. "1.", "Q1.", "Question 1"
     const blocks = text.split(/(?=(?:\d+[\.\)]|Q\d+[\.\)]|Question\s*\d+[\.\)]))/i);
 
     for (const block of blocks) {
       const trimmed = block.trim();
       if (!trimmed) continue;
 
-      // Extract Question Text (before options A/B/C/D)
       const qMatch = trimmed.match(/^(?:\d+[\.\)]|Q\d+[\.\)]|Question\s*\d+[\.\)]|\s*)*([\s\S]+?)(?=\s*[A][\.\)]|\s*Ans|\s*Answer)/i);
       if (!qMatch) continue;
 
       const qText = qMatch[1].trim();
 
-      // Extract options A, B, C, D
       const optAMatch = trimmed.match(/A[\.\)]\s*([\s\S]+?)(?=\s*B[\.\)]|\s*Ans|\s*Answer|$)/i);
       const optBMatch = trimmed.match(/B[\.\)]\s*([\s\S]+?)(?=\s*C[\.\)]|\s*Ans|\s*Answer|$)/i);
       const optCMatch = trimmed.match(/C[\.\)]\s*([\s\S]+?)(?=\s*D[\.\)]|\s*Ans|\s*Answer|$)/i);
       const optDMatch = trimmed.match(/D[\.\)]\s*([\s\S]+?)(?=\s*Ans|\s*Answer|$)/i);
 
-      // Extract Answer
       const ansMatch = trimmed.match(/(?:Ans|Answer|Correct)[:\s]*([A-D])/i);
       const correctOption = ansMatch ? ansMatch[1].toUpperCase() : 'A';
 
@@ -353,12 +356,8 @@ export default function QuestionsPage() {
       showToast(`Successfully imported ${rows.length} questions!`);
       setImportModalOpen(false);
       
-      // Update view if current course matches import course
-      if (selectedCourseId === importCourseId) {
-        fetchQuestions(selectedCourseId);
-      } else {
-        setSelectedCourseId(importCourseId);
-      }
+      setSelectedCourseId(importCourseId);
+      fetchQuestions(importCourseId);
     } catch {
       showToast('Failed to import questions to database', 'error');
     } finally {
@@ -389,7 +388,6 @@ export default function QuestionsPage() {
           <button
             className="btn btn-primary"
             onClick={openAdd}
-            disabled={!selectedCourseId}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
@@ -420,11 +418,16 @@ export default function QuestionsPage() {
         <div className="card" style={{ padding: '3rem', textAlign: 'center' }}>
           <p style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>❓</p>
           <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            Select a course above to view its questions, or use Bulk Import to add questions from CSV/PDF.
+            Select a course above to view its questions, or click Add Question / Bulk Import below.
           </p>
-          <button className="btn btn-outline" onClick={openImportModal}>
-            📄 Bulk Import (CSV / PDF)
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={openAdd}>
+              ➕ Add Question Manually
+            </button>
+            <button className="btn btn-outline" onClick={openImportModal}>
+              📄 Bulk Import (CSV / PDF)
+            </button>
+          </div>
         </div>
       ) : loading || questionsLoading ? (
         <SkeletonTable rows={5} />
@@ -435,7 +438,9 @@ export default function QuestionsPage() {
             No questions for this course yet. Add questions manually or import from CSV/PDF.
           </p>
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" onClick={openAdd}>Add Question</button>
+            <button className="btn btn-primary" onClick={openAdd}>
+              ➕ Add Question Manually
+            </button>
             <button className="btn btn-outline" onClick={openImportModal}>
               📄 Bulk Import (CSV / PDF)
             </button>
@@ -492,17 +497,35 @@ export default function QuestionsPage() {
       <Modal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        title={editing ? 'Edit Question' : 'Add Question'}
+        title={editing ? 'Edit Question' : 'Add Question Manually'}
         footer={
           <>
             <button className="btn btn-ghost" onClick={() => setModalOpen(false)}>Cancel</button>
             <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving...' : editing ? 'Update' : 'Add Question'}
+              {saving ? 'Saving...' : editing ? 'Update Question' : 'Save Question'}
             </button>
           </>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div>
+            <label htmlFor="modal-course-select" className="label">Course *</label>
+            <select
+              id="modal-course-select"
+              className="select"
+              value={formCourseId}
+              onChange={(e) => setFormCourseId(e.target.value)}
+              required
+            >
+              <option value="">-- Select Course --</option>
+              {courses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div>
             <label htmlFor="q-text" className="label">Question Text *</label>
             <textarea

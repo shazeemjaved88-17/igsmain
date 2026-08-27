@@ -47,7 +47,7 @@ export default function DashboardPage() {
       const completedAttempts = allAttempts.filter((a) => a.score !== null && a.total_questions);
       const averageScore =
         completedAttempts.length > 0
-          ? completedAttempts.reduce((sum, a) => sum + (a.score / a.total_questions) * 100, 0) /
+          ? completedAttempts.reduce((sum, a) => sum + (a.score / (a.total_questions * 2)) * 100, 0) /
             completedAttempts.length
           : 0;
 

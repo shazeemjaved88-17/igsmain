@@ -44,42 +44,63 @@ export async function POST(request: NextRequest) {
       .select('id, correct_option')
       .eq('course_id', courseId);
 
-    // Fallback: If querying base table was restricted, query questions_public
-    if (questionsError || !questions || questions.length === 0) {
-      console.warn('Questions query notice:', questionsError);
+    if (questionsError) {
+      console.warn('Primary questions query notice:', questionsError);
+    }
+
+    // Fallback logic if primary questions query returned empty or failed
+    if (!questions || questions.length === 0) {
       const fallbackRes = await supabase
         .from('questions_public')
         .select('id')
         .eq('course_id', courseId);
-      
+
       if (fallbackRes.data && fallbackRes.data.length > 0) {
-        // If correct options couldn't be read, try reading base table without filter
-        const baseRes = await supabase.from('questions').select('id, correct_option').eq('course_id', courseId);
-        questions = baseRes.data || [];
+        // Questions exist in public view, try fetching questions base table again
+        const retryRes = await supabase
+          .from('questions')
+          .select('id, correct_option')
+          .eq('course_id', courseId);
+          
+        if (retryRes.data && retryRes.data.length > 0) {
+          questions = retryRes.data;
+        } else {
+          console.error(
+            `Course ${courseId} has ${fallbackRes.data.length} questions in questions_public, but base questions table query failed or returned 0 rows. Check Supabase RLS policies on 'questions' table or SUPABASE_SERVICE_ROLE_KEY.`
+          );
+          return NextResponse.json(
+            { error: 'Exam submission scoring failed because question answers are restricted by database permission policy. Please notify your administrator.' },
+            { status: 500 }
+          );
+        }
       }
     }
 
     if (!questions || questions.length === 0) {
       return NextResponse.json(
-        { error: 'This course has no questions to score.' },
+        { error: 'This course currently has no questions added. Please ask your course teacher or administrator to add questions.' },
         { status: 400 }
       );
     }
 
     // ======================================================
-    // 3. CALCULATE SCORE
+    // 3. CALCULATE SCORE (1 MCQ = 2 Marks)
     // ======================================================
-    let score = 0;
+    let correctCount = 0;
     const totalQuestions = questions.length;
+    const totalMarks = totalQuestions * 2; // Each MCQ carries 2 marks
 
     for (const question of questions) {
-      const studentAnswer = answers[question.id];
-      if (studentAnswer && studentAnswer === question.correct_option) {
-        score++;
+      const studentAnswer = answers[question.id] ? String(answers[question.id]).trim().toUpperCase() : '';
+      const correctOption = question.correct_option ? String(question.correct_option).trim().toUpperCase() : '';
+      
+      if (studentAnswer && studentAnswer === correctOption) {
+        correctCount++;
       }
     }
 
-    const percentage = Math.round((score / totalQuestions) * 100);
+    const score = correctCount * 2; // 2 marks per MCQ
+    const percentage = totalMarks > 0 ? Math.round((score / totalMarks) * 100) : 0;
 
     // ======================================================
     // 4. INSERT EXAM ATTEMPT
@@ -120,6 +141,8 @@ export async function POST(request: NextRequest) {
       attemptId: attempt.id,
       score,
       total_questions: totalQuestions,
+      total_marks: totalMarks,
+      correct_count: correctCount,
       percentage,
     });
   } catch (err: any) {

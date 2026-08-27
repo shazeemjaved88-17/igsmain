@@ -9,8 +9,10 @@ import Link from 'next/link';
 
 interface AttemptResult {
   id: string;
+  course_id: string;
   score: number;
   total_questions: number;
+  answers: Record<string, string> | null;
   status: string;
   start_time: string;
   end_time: string;
@@ -19,13 +21,25 @@ interface AttemptResult {
   courses: { name: string; teachers: { name: string } | null } | null;
 }
 
+interface QuestionReview {
+  id: string;
+  question_text: string;
+  option_a: string;
+  option_b: string;
+  option_c: string;
+  option_d: string;
+  correct_option?: string;
+}
+
 export default function ResultPage() {
   const params = useParams();
   const attemptId = params.attemptId as string;
   const [result, setResult] = useState<AttemptResult | null>(null);
+  const [questions, setQuestions] = useState<QuestionReview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [passingPct, setPassingPct] = useState(50);
+  const [showPaperReview, setShowPaperReview] = useState(true);
   const supabase = createClient();
 
   useEffect(() => {
@@ -45,8 +59,28 @@ export default function ResultPage() {
       setError('Result not found. The exam attempt could not be located.');
     } else {
       setResult(data);
+      if (data.course_id) {
+        fetchQuestions(data.course_id);
+      }
     }
     setLoading(false);
+  }
+
+  async function fetchQuestions(courseId: string) {
+    let { data: qs } = await supabase
+      .from('questions')
+      .select('*')
+      .eq('course_id', courseId)
+      .order('created_at', { ascending: true });
+
+    if (!qs || qs.length === 0) {
+      const fallback = await supabase
+        .from('questions_public')
+        .select('*')
+        .eq('course_id', courseId);
+      qs = fallback.data || [];
+    }
+    setQuestions(qs || []);
   }
 
   async function fetchSettings() {
@@ -120,10 +154,12 @@ export default function ResultPage() {
     );
   }
 
-  const percentage = result.total_questions
-    ? Math.round((result.score / result.total_questions) * 100)
+  const totalMarks = result.total_questions ? result.total_questions * 2 : 0;
+  const percentage = totalMarks
+    ? Math.round((result.score / totalMarks) * 100)
     : 0;
   const passed = percentage >= passingPct;
+  const correctCount = Math.round(result.score / 2);
 
   return (
     <div
@@ -169,22 +205,23 @@ export default function ResultPage() {
         </Link>
       </header>
 
-      {/* Result Card */}
+      {/* Result Main Content */}
       <main
         style={{
           flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          maxWidth: '750px',
+          width: '100%',
+          margin: '0 auto',
           padding: '2rem 1rem',
         }}
       >
+        {/* Result Summary Card */}
         <div
           className="card animate-scale-in"
           style={{
             width: '100%',
-            maxWidth: '500px',
             overflow: 'hidden',
+            marginBottom: '2rem',
           }}
         >
           {/* Result Header */}
@@ -221,11 +258,17 @@ export default function ResultPage() {
           <div style={{ padding: '2rem', textAlign: 'center' }}>
             {/* Big Score */}
             <div style={{ marginBottom: '2rem' }}>
-              <p style={{ fontSize: '3rem', fontWeight: 800, color: passed ? 'var(--accent)' : '#dc2626', lineHeight: 1 }}>
-                {result.score} / {result.total_questions}
+              <p style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>
+                Obtained Marks
               </p>
-              <p style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              <p style={{ fontSize: '3rem', fontWeight: 800, color: passed ? 'var(--accent)' : '#dc2626', lineHeight: 1 }}>
+                {result.score} / {totalMarks}
+              </p>
+              <p style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
                 {percentage}%
+              </p>
+              <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                ({correctCount} of {result.total_questions} Questions Correct • 2 Marks each)
               </p>
             </div>
 
@@ -290,14 +333,194 @@ export default function ResultPage() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" />
                 </svg>
-                Print Result
+                Print Result & Paper Sheet
               </button>
-              <Link href="/" className="btn btn-outline" style={{ textDecoration: 'none' }}>
+              <button
+                className="btn btn-outline"
+                onClick={() => setShowPaperReview(!showPaperReview)}
+              >
+                {showPaperReview ? '🙈 Hide Paper Review' : '📝 View Paper Review'}
+              </button>
+              <Link href="/" className="btn btn-ghost" style={{ textDecoration: 'none' }}>
                 Go to Home
               </Link>
             </div>
           </div>
         </div>
+
+        {/* Detailed Attempted Paper Review */}
+        {showPaperReview && (
+          <div className="animate-fade-in" style={{ marginTop: '2rem' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '1rem',
+              }}
+            >
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Complete Attempted Paper Review
+              </h2>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                {questions.length} Questions
+              </span>
+            </div>
+
+            {questions.length === 0 ? (
+              <div className="card" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                No question details available for this attempt.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                {questions.map((q, idx) => {
+                  const studentSelected = result.answers ? result.answers[q.id] : undefined;
+                  const selectedNorm = studentSelected ? String(studentSelected).trim().toUpperCase() : '';
+                  const correctNorm = q.correct_option ? String(q.correct_option).trim().toUpperCase() : '';
+
+                  const isCorrect = selectedNorm !== '' && selectedNorm === correctNorm;
+                  const isAttempted = selectedNorm !== '';
+
+                  return (
+                    <div
+                      key={q.id}
+                      className="card"
+                      style={{
+                        padding: '1.25rem',
+                        borderLeft: `4px solid ${
+                          isCorrect
+                            ? '#2d9e55'
+                            : isAttempted
+                            ? '#dc2626'
+                            : '#9ca3af'
+                        }`,
+                      }}
+                    >
+                      {/* Question Header & Status */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginBottom: '0.75rem',
+                        }}
+                      >
+                        <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--primary)' }}>
+                          Question {idx + 1} of {questions.length}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            padding: '0.25rem 0.625rem',
+                            borderRadius: '12px',
+                            background: isCorrect
+                              ? '#e8f5ed'
+                              : isAttempted
+                              ? '#fef2f2'
+                              : '#f3f4f6',
+                            color: isCorrect
+                              ? '#1B7A3D'
+                              : isAttempted
+                              ? '#dc2626'
+                              : '#6b7280',
+                          }}
+                        >
+                          {isCorrect
+                            ? '✓ Correct (+2 Marks)'
+                            : isAttempted
+                            ? '✕ Incorrect (0 Marks)'
+                            : '⚪ Unanswered (0 Marks)'}
+                        </span>
+                      </div>
+
+                      {/* Question Text */}
+                      <p style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '1rem', lineHeight: 1.5 }}>
+                        {q.question_text}
+                      </p>
+
+                      {/* Options Grid */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
+                        {(['A', 'B', 'C', 'D'] as const).map((opt) => {
+                          const key = `option_${opt.toLowerCase()}` as keyof QuestionReview;
+                          const optText = q[key] || '';
+                          const isStudentChoice = selectedNorm === opt;
+                          const isCorrectOption = correctNorm === opt;
+
+                          let bg = 'var(--bg-secondary)';
+                          let borderColor = 'var(--border)';
+                          let badgeText = '';
+                          let badgeBg = '';
+                          let badgeColor = '';
+
+                          if (isStudentChoice && isCorrectOption) {
+                            bg = '#e8f5ed';
+                            borderColor = '#2d9e55';
+                            badgeText = '✓ Selected (Correct)';
+                            badgeBg = '#2d9e55';
+                            badgeColor = 'white';
+                          } else if (isStudentChoice && !isCorrectOption) {
+                            bg = '#fef2f2';
+                            borderColor = '#ef4444';
+                            badgeText = '✕ Selected (Wrong)';
+                            badgeBg = '#ef4444';
+                            badgeColor = 'white';
+                          } else if (isCorrectOption && (!isStudentChoice || !isAttempted)) {
+                            bg = '#e8f5ed';
+                            borderColor = '#2d9e55';
+                            badgeText = '✓ Correct Answer';
+                            badgeBg = '#1B7A3D';
+                            badgeColor = 'white';
+                          }
+
+                          return (
+                            <div
+                              key={opt}
+                              style={{
+                                padding: '0.625rem 0.875rem',
+                                borderRadius: 'var(--radius-sm)',
+                                background: bg,
+                                border: `1.5px solid ${borderColor}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                fontSize: '0.875rem',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontWeight: 700, color: 'var(--primary)', minWidth: '1.25rem' }}>
+                                  {opt}.
+                                </span>
+                                <span style={{ color: 'var(--text-primary)' }}>{optText}</span>
+                              </div>
+
+                              {badgeText && (
+                                <span
+                                  style={{
+                                    fontSize: '0.6875rem',
+                                    fontWeight: 700,
+                                    padding: '0.125rem 0.5rem',
+                                    borderRadius: '4px',
+                                    background: badgeBg,
+                                    color: badgeColor,
+                                    whiteSpace: 'nowrap',
+                                    marginLeft: '0.5rem',
+                                  }}
+                                >
+                                  {badgeText}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {/* Footer */}

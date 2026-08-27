@@ -376,9 +376,25 @@ export default function ExamPage() {
             <p style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)' }}>
               {session?.studentName}
             </p>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Roll: {session?.rollNumber}
-            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.125rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                Roll: {session?.rollNumber}
+              </span>
+              {questions.length > 0 && (
+                <span
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    padding: '0.125rem 0.5rem',
+                    borderRadius: '12px',
+                    background: '#f3e8f9',
+                    color: 'var(--primary)',
+                  }}
+                >
+                  {questions.length} MCQs ({questions.length * 2} Marks)
+                </span>
+              )}
+            </div>
           </div>
 
           <div

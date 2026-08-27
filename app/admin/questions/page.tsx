@@ -1,5 +1,5 @@
 // app/admin/questions/page.tsx
-// Admin questions CRUD page — MCQ management + Bulk Import from CSV and PDF
+// Admin questions CRUD page — MCQ management + Bulk Import from CSV and PDF + Answer Key PDF upload
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
@@ -62,8 +62,11 @@ export default function QuestionsPage() {
   const [importCourseId, setImportCourseId] = useState('');
   const [parsedQuestions, setParsedQuestions] = useState<ParsedQuestion[]>([]);
   const [parsing, setParsing] = useState(false);
+  const [parsingAnswers, setParsingAnswers] = useState(false);
   const [importing, setImporting] = useState(false);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const answerKeyInputRef = useRef<HTMLInputElement>(null);
 
   const supabase = createClient();
   const { showToast } = useToast();
@@ -190,7 +193,7 @@ export default function QuestionsPage() {
     setImportModalOpen(true);
   }
 
-  // Handle File Selection (CSV, PDF, TXT)
+  // Handle Questions File Selection (CSV, PDF, TXT)
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -223,6 +226,47 @@ export default function QuestionsPage() {
     } finally {
       setParsing(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  // Handle Answer Key File Selection (PDF, TXT, CSV)
+  async function handleAnswerKeySelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setParsingAnswers(true);
+    try {
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      let text = '';
+
+      if (extension === 'pdf') {
+        text = await extractTextFromPDF(file);
+      } else {
+        text = await file.text();
+      }
+
+      const answerMap = parseAnswerKeyText(text);
+      const answerCount = Object.keys(answerMap).length;
+
+      if (answerCount === 0) {
+        showToast('No answer key patterns found in file', 'warning');
+      } else {
+        // Apply answer key to parsed questions
+        setParsedQuestions((prev) =>
+          prev.map((q, idx) => {
+            const qNum = idx + 1;
+            const foundAns = answerMap[qNum];
+            return foundAns ? { ...q, correct_option: foundAns } : q;
+          })
+        );
+        showToast(`Applied ${answerCount} answers from Answer Key PDF/file!`);
+      }
+    } catch (err) {
+      console.error('Answer key parsing error:', err);
+      showToast('Failed to parse answer key file', 'error');
+    } finally {
+      setParsingAnswers(false);
+      if (answerKeyInputRef.current) answerKeyInputRef.current.value = '';
     }
   }
 
@@ -325,6 +369,25 @@ export default function QuestionsPage() {
     }
 
     return questions;
+  }
+
+  // Parse Answer Key Text (e.g., "1. A", "2: B", "Q3 - C")
+  function parseAnswerKeyText(text: string): Record<number, string> {
+    const answers: Record<number, string> = {};
+    const matches = text.matchAll(/(?:Q|Question\s*)?(\d+)[\.\:\-\)\s]+([A-D])/gi);
+    for (const match of matches) {
+      const qNum = parseInt(match[1], 10);
+      const ans = match[2].toUpperCase();
+      answers[qNum] = ans;
+    }
+    return answers;
+  }
+
+  // Set all parsed questions to a specific answer
+  function setAllAnswers(option: string) {
+    setParsedQuestions((prev) =>
+      prev.map((q) => ({ ...q, correct_option: option }))
+    );
   }
 
   // Confirm Bulk Import to Database
@@ -580,7 +643,7 @@ export default function QuestionsPage() {
         </div>
       </Modal>
 
-      {/* BULK IMPORT MODAL (CSV & PDF) */}
+      {/* BULK IMPORT MODAL (CSV & PDF & ANSWER KEY) */}
       <Modal
         isOpen={importModalOpen}
         onClose={() => setImportModalOpen(false)}
@@ -622,7 +685,7 @@ export default function QuestionsPage() {
             </select>
           </div>
 
-          {/* Step 2: Upload File */}
+          {/* Step 2: Upload Questions File */}
           <div>
             <label htmlFor="import-file" className="label">
               2. Upload Questions File (.csv, .pdf, .txt) *
@@ -642,18 +705,57 @@ export default function QuestionsPage() {
               disabled={parsing}
               style={{ width: '100%', padding: '0.875rem' }}
             >
-              {parsing ? 'Parsing File...' : '📁 Choose CSV / PDF / TXT File'}
+              {parsing ? 'Parsing Questions File...' : '📁 Choose Questions File (PDF / CSV / TXT)'}
             </button>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.375rem' }}>
-              Formats supported: CSV (columns: question_text, option_a, option_b, option_c, option_d, correct_option) or PDF/TXT.
-            </p>
           </div>
 
-          {/* Step 3: Parsed Questions Preview */}
+          {/* Step 3: Optional Answer Key Upload & Quick Answer Assign */}
+          {parsedQuestions.length > 0 && (
+            <div style={{ padding: '0.875rem', background: '#f8fafc', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+              <label className="label" style={{ marginBottom: '0.5rem' }}>
+                3. Answer Key Options (Optional)
+              </label>
+
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                <input
+                  ref={answerKeyInputRef}
+                  type="file"
+                  accept=".pdf,.txt,.csv"
+                  onChange={handleAnswerKeySelect}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => answerKeyInputRef.current?.click()}
+                  disabled={parsingAnswers}
+                >
+                  {parsingAnswers ? 'Parsing Answer Key...' : '📎 Upload Separate Answer Key PDF / TXT'}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Set all answers to:</span>
+                {['A', 'B', 'C', 'D'].map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ padding: '0.125rem 0.5rem', fontSize: '0.75rem', border: '1px solid var(--border)' }}
+                    onClick={() => setAllAnswers(opt)}
+                  >
+                    Set All {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Parsed Questions Preview */}
           {parsedQuestions.length > 0 && (
             <div>
               <p style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--accent)', marginBottom: '0.5rem' }}>
-                ✓ Parsed {parsedQuestions.length} Questions (Preview):
+                ✓ Parsed {parsedQuestions.length} Questions (Preview & Edit Answers):
               </p>
               <div
                 style={{

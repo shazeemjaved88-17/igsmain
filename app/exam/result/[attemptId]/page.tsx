@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { generateAttemptedPaperPDF } from '@/lib/utils/pdfGenerator';
 import Link from 'next/link';
 
 interface AttemptResult {
@@ -40,6 +41,7 @@ export default function ResultPage() {
   const [error, setError] = useState('');
   const [passingPct, setPassingPct] = useState(50);
   const [showPaperReview, setShowPaperReview] = useState(true);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const supabase = createClient();
 
   useEffect(() => {
@@ -97,6 +99,31 @@ export default function ResultPage() {
 
   function handlePrint() {
     window.print();
+  }
+
+  async function handleDownloadPDF() {
+    if (!result) return;
+    setExportingPdf(true);
+    try {
+      const filename = `${result.students?.name || 'Student'}_${result.students?.roll_number || ''}_Attempted_Paper.pdf`.replace(/\s+/g, '_');
+      await generateAttemptedPaperPDF({
+        elementId: 'attempted-paper-pdf-content',
+        filename,
+        studentName: result.students?.name || 'Student',
+        rollNumber: result.students?.roll_number || 'N/A',
+        courseName: result.courses?.name || 'Exam',
+        teacherName: result.courses?.teachers?.name || 'N/A',
+        score: result.score,
+        totalQuestions: result.total_questions,
+        createdAt: result.created_at,
+        questions,
+        answers: result.answers,
+      });
+    } catch (err) {
+      console.error('PDF export error:', err);
+    } finally {
+      setExportingPdf(false);
+    }
   }
 
   if (loading) {
@@ -207,12 +234,14 @@ export default function ResultPage() {
 
       {/* Result Main Content */}
       <main
+        id="attempted-paper-pdf-content"
         style={{
           flex: 1,
           maxWidth: '750px',
           width: '100%',
           margin: '0 auto',
           padding: '2rem 1rem',
+          background: '#ffffff',
         }}
       >
         {/* Result Summary Card */}
@@ -329,6 +358,17 @@ export default function ResultPage() {
 
             {/* Actions */}
             <div className="no-print" style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-accent"
+                onClick={handleDownloadPDF}
+                disabled={exportingPdf}
+                style={{ background: '#10b981', borderColor: '#10b981', color: 'white' }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                {exportingPdf ? 'Generating PDF...' : 'Download PDF'}
+              </button>
               <button className="btn btn-primary" onClick={handlePrint}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" />

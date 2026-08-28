@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useToast } from '@/components/ui/Toast';
 import { SkeletonTable } from '@/components/ui/LoadingSpinner';
+import { generateAttemptedPaperPDF } from '@/lib/utils/pdfGenerator';
 
 interface Course {
   id: string;
@@ -50,6 +51,7 @@ export default function ResultsPage() {
   const [paperLoading, setPaperLoading] = useState(false);
   const [paperModalOpen, setPaperModalOpen] = useState(false);
   const [paperFilter, setPaperFilter] = useState<'all' | 'correct' | 'incorrect' | 'unanswered'>('all');
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   const supabase = createClient();
   const { showToast } = useToast();
@@ -154,6 +156,33 @@ export default function ResultsPage() {
     a.click();
     URL.revokeObjectURL(url);
     showToast('CSV exported successfully');
+  }
+
+  async function handleDownloadPDF() {
+    if (!selectedAttempt) return;
+    setExportingPdf(true);
+    try {
+      const filename = `${selectedAttempt.students?.name || 'Student'}_${selectedAttempt.students?.roll_number || ''}_Attempted_Paper.pdf`.replace(/\s+/g, '_');
+      await generateAttemptedPaperPDF({
+        elementId: 'attempted-paper-pdf-content',
+        filename,
+        studentName: selectedAttempt.students?.name || 'Student',
+        rollNumber: selectedAttempt.students?.roll_number || 'N/A',
+        courseName: selectedAttempt.courses?.name || 'Exam',
+        teacherName: selectedAttempt.courses?.teachers?.name || 'N/A',
+        score: selectedAttempt.score,
+        totalQuestions: selectedAttempt.total_questions,
+        createdAt: selectedAttempt.created_at,
+        questions: paperQuestions,
+        answers: selectedAttempt.answers,
+      });
+      showToast('PDF downloaded successfully!');
+    } catch (err) {
+      console.error('PDF export error:', err);
+      showToast('Failed to generate PDF', 'error');
+    } finally {
+      setExportingPdf(false);
+    }
   }
 
   return (
@@ -385,6 +414,15 @@ export default function ResultsPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <button
                   className="btn btn-sm"
+                  onClick={handleDownloadPDF}
+                  disabled={exportingPdf}
+                  style={{ background: '#10b981', color: 'white', fontWeight: 600, border: 'none' }}
+                  title="Download complete attempted paper as PDF"
+                >
+                  {exportingPdf ? '⏳ Generating PDF...' : '📥 Download PDF'}
+                </button>
+                <button
+                  className="btn btn-sm"
                   onClick={() => window.print()}
                   style={{ background: 'white', color: 'var(--primary)', fontWeight: 600 }}
                 >
@@ -407,7 +445,7 @@ export default function ResultsPage() {
             </div>
 
             {/* Modal Body */}
-            <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+            <div id="attempted-paper-pdf-content" style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, background: '#ffffff' }}>
               {/* Stats Bar */}
               <div
                 style={{
